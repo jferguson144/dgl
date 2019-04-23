@@ -16,7 +16,8 @@ import torch.nn.functional as F
 import random
 from dgl.contrib.data import load_data
 
-from layers import RGCNBlockLayer as RGCNLayer
+#from layers import RGCNBlockLayer as RGCNLayer
+from layers import RGCN_Attn_BlockLayer as RGCNLayer
 from model import BaseRGCN
 
 import utils
@@ -37,6 +38,7 @@ class RGCN(BaseRGCN):
     def build_hidden_layer(self, idx):
         act = F.relu if idx < self.num_hidden_layers - 1 else None
         return RGCNLayer(self.h_dim, self.h_dim, self.num_rels, self.num_bases,
+                         num_heads=1,
                          activation=act, self_loop=True, dropout=self.dropout)
 
 class LinkPredict(nn.Module):
