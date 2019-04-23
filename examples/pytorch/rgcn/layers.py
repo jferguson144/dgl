@@ -164,7 +164,8 @@ class RGCNBlockLayer(RGCNLayer):
 
 class RGCN_Attn_BlockLayer(RGCNLayer):
     def __init__(self, in_feat, out_feat, num_rels, num_bases, num_heads=1, 
-                 bias=None, activation=None, self_loop=False, dropout=0.0):
+                 bias=None, activation=None, self_loop=False, dropout=0.0, 
+                 concat_attn=True):
         super(RGCN_Attn_BlockLayer, self).__init__(in_feat, out_feat, bias,
                                              activation, self_loop=self_loop,
                                              dropout=dropout)
@@ -172,15 +173,22 @@ class RGCN_Attn_BlockLayer(RGCNLayer):
         self.num_bases = num_bases
         assert self.num_bases > 0
 
+        # attn head transformation to ensure that output vectors are same size as input vcetors
+        if concat_attn:
+          out_feat = int(out_feat / num_heads)
+
         self.out_feat = out_feat
         self.submat_in = in_feat // self.num_bases
         self.submat_out = out_feat // self.num_bases
         # Attn stuff
+        self.concat_attn = concat_attn
         self.num_heads = num_heads
         self.softmax = EdgeSoftmax()
         self.attn_k = nn.Parameter(torch.Tensor(size=(num_heads, in_feat, out_feat)))
+        nn.init.xavier_uniform_(self.attn_k, gain=nn.init.calculate_gain('relu'))
         self.attn_q = nn.Parameter(torch.Tensor(size=(num_heads, out_feat, out_feat)))
-
+        nn.init.xavier_uniform_(self.attn_q, gain=nn.init.calculate_gain('relu'))
+#        self.leaky_relu = nn.LeakyReLU(alpha)
 
         # assuming in_feat and out_feat are both divisible by num_bases
         # jferguson: Adjust the output size of weight to account for multiple heads
@@ -190,10 +198,17 @@ class RGCN_Attn_BlockLayer(RGCNLayer):
 
     def msg_func(self, edges):
         # multiply edge_values by edge_attn
-        #print(edges.data["edge_value"].shape, edges.data["unnormalized_attn"].shape)
-        #input("wee")
-        msg = edges.data["edge_value"] * edges.data["unnormalized_attn"] / edges.dst["z"]
-        return {'msg': msg}
+        # expanded_edges has shape E x H x h/H
+        expanded_edges = edges.data["edge_value"].unsqueeze(1).expand([-1, self.num_heads, -1])
+
+        msg = expanded_edges * edges.data["unnormalized_attn"] / edges.dst["z"]
+        if self.concat_attn:
+          # Intermediate layer, concatenate each attention head
+          final_msg = msg.view([msg.shape[0], -1])
+        else:
+          # Final layer, average each attention head
+          final_msg = msg.sum(dim=1) / self.num_heads
+        return {'msg': final_msg}
 
         
     def EdgeTransform(self, edges):
@@ -209,8 +224,9 @@ class RGCN_Attn_BlockLayer(RGCNLayer):
 
     def EdgeAttention(self, edges):
         # an edge UDF to compute unnormalized attention values from src and transformed dst
-        # Both are ExHx1
-        a = (edges.dst['a1'] * edges.data['a2']).sum(-1)
+        # a is ExH
+        a = (edges.dst['a1'] * edges.data['a2']).sum(-1, keepdim=True)
+
         # a is the edge transformation without exponentiation
         return {'a' : a}
 
@@ -218,7 +234,6 @@ class RGCN_Attn_BlockLayer(RGCNLayer):
         scores, normalizer = self.softmax(g.edata['a'], g)
         # Save normalizer
         g.ndata['z'] = normalizer
-        
         # Dropout attention scores and save them
         # jferguson: Removed attn dropout
         g.edata['unnormalized_attn'] = scores # self.attn_drop(scores)
@@ -231,18 +246,21 @@ class RGCN_Attn_BlockLayer(RGCNLayer):
         # edges all have edge_value according to W_r * h_s
         # We now want to compute attention between h_d and edge_value
         # h has shape NxX. Want it to have shape NxHxD
-
-        expanded_h = h.unsqueeze(0).view([self.num_heads, h.shape[0], h.shape[1]])
+        #ft = self.fc(h).reshape((h.shape[0], self.num_heads, -1))  # NxHxD'
+        #head_ft = ft.transpose(0, 1)  # HxNxD'
+        expanded_h = h.unsqueeze(0).expand([self.num_heads, -1, -1])
         e = g.edata["edge_value"]
-        expanded_edges = e.unsqueeze(0).view([self.num_heads, e.shape[0], e.shape[1]])
-        a1 = torch.bmm(expanded_h, self.attn_k).transpose(0, 1)  # NxHx1
-        a2 = torch.bmm(expanded_edges, self.attn_q).transpose(0, 1)  # ExHx1
+        expanded_edges = e.unsqueeze(0).expand([self.num_heads, -1, -1])
+        a1 = torch.bmm(expanded_h, self.attn_k).transpose(0, 1)  # NxHxh/H
+        a2 = torch.bmm(expanded_edges, self.attn_q).transpose(0, 1)  # ExHxh/H
 
+        #g.ndata.update({'ft' : ft, 'a1' : a1, 'a2' : a2})
         g.ndata.update({'a1' : a1})
         g.edata.update({'a2' : a2})
         
         g.apply_edges(self.EdgeAttention)
         self.EdgeSoftmax(g)
+
         g.update_all(self.msg_func, fn.sum(msg='msg', out='h'), self.apply_func)
 
 

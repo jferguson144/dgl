@@ -16,8 +16,13 @@ import torch.nn.functional as F
 import random
 from dgl.contrib.data import load_data
 
-#from layers import RGCNBlockLayer as RGCNLayer
-from layers import RGCN_Attn_BlockLayer as RGCNLayer
+# TODO (jferguson): This is ugly. Fix it.
+USE_ATTN = False
+if USE_ATTN:
+  from layers import RGCN_Attn_BlockLayer as RGCNLayer
+else:
+  from layers import RGCNBlockLayer as RGCNLayer
+
 from model import BaseRGCN
 
 import utils
@@ -37,15 +42,21 @@ class RGCN(BaseRGCN):
 
     def build_hidden_layer(self, idx):
         act = F.relu if idx < self.num_hidden_layers - 1 else None
-        return RGCNLayer(self.h_dim, self.h_dim, self.num_rels, self.num_bases,
-                         num_heads=1,
-                         activation=act, self_loop=True, dropout=self.dropout)
+        concat = True if idx < self.num_hidden_layers - 1 else False
+        if USE_ATTN:
+          return RGCNLayer(self.h_dim, self.h_dim, self.num_rels, self.num_bases,
+                           num_heads=self.num_heads,
+                           activation=act, self_loop=True, dropout=self.dropout, 
+                           concat_attn=concat)
+        else:
+          return RGCNLayer(self.h_dim, self.h_dim, self.num_rels, self.num_bases,
+                           activation=act, self_loop=True, dropout=self.dropout)
 
 class LinkPredict(nn.Module):
-    def __init__(self, in_dim, h_dim, num_rels, num_bases=-1,
+    def __init__(self, in_dim, h_dim, num_rels, num_heads=1, num_bases=-1,
                  num_hidden_layers=1, dropout=0, use_cuda=False, reg_param=0):
         super(LinkPredict, self).__init__()
-        self.rgcn = RGCN(in_dim, h_dim, h_dim, num_rels * 2, num_bases,
+        self.rgcn = RGCN(in_dim, h_dim, h_dim, num_rels * 2, num_heads, num_bases,
                          num_hidden_layers, dropout, use_cuda)
         self.reg_param = reg_param
         self.w_relation = nn.Parameter(torch.Tensor(num_rels, h_dim))
@@ -99,6 +110,7 @@ def main(args):
     model = LinkPredict(num_nodes,
                         args.n_hidden,
                         num_rels,
+                        num_heads=args.n_heads,
                         num_bases=args.n_bases,
                         num_hidden_layers=args.n_layers,
                         dropout=args.dropout,
@@ -245,6 +257,8 @@ if __name__ == '__main__':
             help="number of negative samples per positive sample")
     parser.add_argument("--evaluate-every", type=int, default=500,
             help="perform evaluation every n epochs")
+    parser.add_argument("--n-heads", type=int, default=1,
+            help="Number of attention heads to use.")
 
     args = parser.parse_args()
     print(args)
