@@ -173,14 +173,16 @@ class RGCN_Attn_BlockLayer(RGCNLayer):
         self.num_bases = num_bases
         assert self.num_bases > 0
 
-        # attn head transformation to ensure that output vectors are same size as input vcetors
-        if concat_attn:
-          out_feat = int(out_feat / num_heads)
-
         self.out_feat = out_feat
         self.submat_in = in_feat // self.num_bases
         self.submat_out = out_feat // self.num_bases
         # Attn stuff
+        # attn head transformation to ensure that output vectors are same size as input vcetors
+        if concat_attn:
+          attn_feat = int(out_feat / num_heads)
+        else:
+          attn_feat = out_feat
+
         self.concat_attn = concat_attn
         self.num_heads = num_heads
         self.softmax = EdgeSoftmax()
@@ -188,6 +190,8 @@ class RGCN_Attn_BlockLayer(RGCNLayer):
         nn.init.xavier_uniform_(self.attn_k, gain=nn.init.calculate_gain('relu'))
         self.attn_q = nn.Parameter(torch.Tensor(size=(num_heads, out_feat, out_feat)))
         nn.init.xavier_uniform_(self.attn_q, gain=nn.init.calculate_gain('relu'))
+        self.attn_transform = torch.nn.Linear(out_feat, attn_feat, bias=False)
+
 #        self.leaky_relu = nn.LeakyReLU(alpha)
 
         # assuming in_feat and out_feat are both divisible by num_bases
@@ -198,10 +202,11 @@ class RGCN_Attn_BlockLayer(RGCNLayer):
 
     def msg_func(self, edges):
         # multiply edge_values by edge_attn
-        # expanded_edges has shape E x H x h/H
+        # expanded_edges has shape E x H x h
         expanded_edges = edges.data["edge_value"].unsqueeze(1).expand([-1, self.num_heads, -1])
-
-        msg = expanded_edges * edges.data["unnormalized_attn"] / edges.dst["z"]
+        # intermediate layers: E x H x h/H. Final layer: E x H x h
+        transformed_edges = self.attn_transform(expanded_edges)#torch.matmul(expanded_edges.unsqueeze(2), self.attn_transform.unsqueeze(0).unsqueeze(0)).squeeze(2)
+        msg = transformed_edges * edges.data["unnormalized_attn"] / edges.dst["z"]
         if self.concat_attn:
           # Intermediate layer, concatenate each attention head
           final_msg = msg.view([msg.shape[0], -1])
