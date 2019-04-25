@@ -165,7 +165,7 @@ class RGCNBlockLayer(RGCNLayer):
 class RGCN_Attn_BlockLayer(RGCNLayer):
     def __init__(self, in_feat, out_feat, num_rels, num_bases, num_heads=1, 
                  bias=None, activation=None, self_loop=False, dropout=0.0, 
-                 concat_attn=True):
+                 concat_attn=True, relation_type="block"):
         super(RGCN_Attn_BlockLayer, self).__init__(in_feat, out_feat, bias,
                                              activation, self_loop=self_loop,
                                              dropout=dropout)
@@ -174,14 +174,10 @@ class RGCN_Attn_BlockLayer(RGCNLayer):
         assert self.num_bases > 0
 
         self.out_feat = out_feat
-        self.submat_in = in_feat // self.num_bases
-        self.submat_out = out_feat // self.num_bases
         # Attn stuff
         # attn head transformation to ensure that output vectors are same size as input vcetors
-        if concat_attn:
-          attn_feat = int(out_feat / num_heads)
-        else:
-          attn_feat = out_feat
+
+        self.relation_type = relation_type
 
         self.concat_attn = concat_attn
         self.num_heads = num_heads
@@ -190,23 +186,39 @@ class RGCN_Attn_BlockLayer(RGCNLayer):
         nn.init.xavier_uniform_(self.attn_k, gain=nn.init.calculate_gain('relu'))
         self.attn_q = nn.Parameter(torch.Tensor(size=(num_heads, out_feat, out_feat)))
         nn.init.xavier_uniform_(self.attn_q, gain=nn.init.calculate_gain('relu'))
-        self.attn_transform = torch.nn.Linear(out_feat, attn_feat, bias=False)
 
-#        self.leaky_relu = nn.LeakyReLU(alpha)
+        if concat_attn:
+          attn_feat = int(out_feat / num_heads)
+        else:
+          attn_feat = out_feat
+        self.attn_transforms = []
+        for head in range(self.num_heads):
+          self.attn_transforms.append(torch.nn.Linear(out_feat, attn_feat, bias=False))
+          self.add_module("attn_transform_%d" %(head), self.attn_transforms[head])
+
 
         # assuming in_feat and out_feat are both divisible by num_bases
-        # jferguson: Adjust the output size of weight to account for multiple heads
-        self.weight = nn.Parameter(torch.Tensor(
+        if relation_type == "block":
+          self.submat_in = in_feat // self.num_bases
+          self.submat_out = out_feat // self.num_bases
+
+          self.weight = nn.Parameter(torch.Tensor(
             self.num_rels, self.num_bases * self.submat_in * self.submat_out))
-        nn.init.xavier_uniform_(self.weight, gain=nn.init.calculate_gain('relu'))
+          nn.init.xavier_uniform_(self.weight, gain=nn.init.calculate_gain('relu'))
+        elif relation_type == "vector":
+          self.weight = nn.Parameter(torch.Tensor(self.num_rels, out_feat))
+          nn.init.xavier_uniform_(self.weight, gain=nn.init.calculate_gain('relu'))
+          
 
     def msg_func(self, edges):
         # multiply edge_values by edge_attn
         # expanded_edges has shape E x H x h
         expanded_edges = edges.data["edge_value"].unsqueeze(1).expand([-1, self.num_heads, -1])
         # intermediate layers: E x H x h/H. Final layer: E x H x h
-        transformed_edges = self.attn_transform(expanded_edges)#torch.matmul(expanded_edges.unsqueeze(2), self.attn_transform.unsqueeze(0).unsqueeze(0)).squeeze(2)
-        msg = transformed_edges * edges.data["unnormalized_attn"] / edges.dst["z"]
+        transformed_edges = []
+        for head in range(self.num_heads):
+          transformed_edges.append(self.attn_transforms[head](expanded_edges[:, head]))
+        msg = torch.stack(transformed_edges, dim=1) * edges.data["unnormalized_attn"] / edges.dst["z"]
         if self.concat_attn:
           # Intermediate layer, concatenate each attention head
           final_msg = msg.view([msg.shape[0], -1])
@@ -216,7 +228,7 @@ class RGCN_Attn_BlockLayer(RGCNLayer):
         return {'msg': final_msg}
 
         
-    def EdgeTransform(self, edges):
+    def EdgeTransformBlock(self, edges):
         weight = self.weight.index_select(0, edges.data['type']).view(
                     -1, self.submat_in, self.submat_out)
         node = edges.src['h'].view(-1, 1, self.submat_in)
@@ -226,6 +238,15 @@ class RGCN_Attn_BlockLayer(RGCNLayer):
         
         return {'edge_value': edge_value}
 
+    def EdgeTransformVector(self, edges):
+      weight = self.weight.index_select(0, edges.data["type"])
+      node = edges.src["h"]
+      edge_value = node
+      if weight.shape[1] < node.shape[1]:
+        edge_value[:, :weight.shape[1]] += weight
+      else:
+        edge_value += weight
+      return {"edge_value": edge_value}
 
     def EdgeAttention(self, edges):
         # an edge UDF to compute unnormalized attention values from src and transformed dst
@@ -247,7 +268,12 @@ class RGCN_Attn_BlockLayer(RGCNLayer):
     def propagate(self, g):
         # Apply attention to msg
         h = g.ndata["h"]
-        g.apply_edges(self.EdgeTransform)
+        if self.relation_type == "block":
+          g.apply_edges(self.EdgeTransformBlock)
+        elif self.relation_type == "vector":
+          g.apply_edges(self.EdgeTransformVector)
+        elif self.relation_type == "basis":
+          pass
         # edges all have edge_value according to W_r * h_s
         # We now want to compute attention between h_d and edge_value
         # h has shape NxX. Want it to have shape NxHxD

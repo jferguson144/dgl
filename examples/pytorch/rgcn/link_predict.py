@@ -47,17 +47,17 @@ class RGCN(BaseRGCN):
           return RGCNLayer(self.h_dim, self.h_dim, self.num_rels, self.num_bases,
                            num_heads=self.num_heads,
                            activation=act, self_loop=True, dropout=self.dropout, 
-                           concat_attn=concat)
+                           concat_attn=concat, self.relation_type)
         else:
           return RGCNLayer(self.h_dim, self.h_dim, self.num_rels, self.num_bases,
                            activation=act, self_loop=True, dropout=self.dropout)
 
 class LinkPredict(nn.Module):
     def __init__(self, in_dim, h_dim, num_rels, num_heads=1, num_bases=-1,
-                 num_hidden_layers=1, dropout=0, use_cuda=False, reg_param=0):
+                 num_hidden_layers=1, dropout=0, use_cuda=False, reg_param=0, relation_type="block"):
         super(LinkPredict, self).__init__()
         self.rgcn = RGCN(in_dim, h_dim, h_dim, num_rels * 2, num_heads, num_bases,
-                         num_hidden_layers, dropout, use_cuda)
+                         num_hidden_layers, dropout, use_cuda, relation_type)
         self.reg_param = reg_param
         self.w_relation = nn.Parameter(torch.Tensor(num_rels, h_dim))
         nn.init.xavier_uniform_(self.w_relation,
@@ -115,7 +115,8 @@ def main(args):
                         num_hidden_layers=args.n_layers,
                         dropout=args.dropout,
                         use_cuda=use_cuda,
-                        reg_param=args.regularization)
+                        reg_param=args.regularization,
+                        relation_type=args.relation_type)
 
     # validation and testing triplets
     valid_data = torch.LongTensor(valid_data)
@@ -276,6 +277,8 @@ if __name__ == '__main__':
             help="Use SGD with warm restarts for learning.")
     parser.add_argument("--lr-decay", type=float, default=0.9,
             help="Learning rate decay is using SGD")
+    parser.add_argument("--relation_type", type=str, default="block", choices=["block", "basis", "vector"],
+            help="How to encode relations.")
 
     args = parser.parse_args()
     print(args)
