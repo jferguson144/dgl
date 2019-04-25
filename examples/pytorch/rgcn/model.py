@@ -2,7 +2,8 @@ import torch.nn as nn
 
 class BaseRGCN(nn.Module):
     def __init__(self, num_nodes, h_dim, out_dim, num_rels, num_heads=1, num_bases=-1,
-                 num_hidden_layers=1, dropout=0, use_cuda=False, relation_type="block"):
+                 num_hidden_layers=1, dropout=0, use_cuda=False, relation_type="block", 
+                 relation_size=-1):
         super(BaseRGCN, self).__init__()
         self.num_nodes = num_nodes
         self.h_dim = h_dim
@@ -14,6 +15,7 @@ class BaseRGCN(nn.Module):
         self.use_cuda = use_cuda
         self.num_heads = num_heads
         self.relation_type = relation_type
+        self.relation_size = relation_size
 
         # create rgcn layers
         self.build_model()

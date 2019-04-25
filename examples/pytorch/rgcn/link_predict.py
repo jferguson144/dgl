@@ -47,17 +47,19 @@ class RGCN(BaseRGCN):
           return RGCNLayer(self.h_dim, self.h_dim, self.num_rels, self.num_bases,
                            num_heads=self.num_heads,
                            activation=act, self_loop=True, dropout=self.dropout, 
-                           concat_attn=concat, relation_type=self.relation_type)
+                           concat_attn=concat, relation_type=self.relation_type, 
+                           relation_size=self.relation_size)
         else:
           return RGCNLayer(self.h_dim, self.h_dim, self.num_rels, self.num_bases,
                            activation=act, self_loop=True, dropout=self.dropout)
 
 class LinkPredict(nn.Module):
     def __init__(self, in_dim, h_dim, num_rels, num_heads=1, num_bases=-1,
-                 num_hidden_layers=1, dropout=0, use_cuda=False, reg_param=0, relation_type="block"):
+                 num_hidden_layers=1, dropout=0, use_cuda=False, reg_param=0, relation_type="block",
+                 relation_size=-1):
         super(LinkPredict, self).__init__()
         self.rgcn = RGCN(in_dim, h_dim, h_dim, num_rels * 2, num_heads, num_bases,
-                         num_hidden_layers, dropout, use_cuda, relation_type)
+                         num_hidden_layers, dropout, use_cuda, relation_type, relation_size)
         self.reg_param = reg_param
         self.w_relation = nn.Parameter(torch.Tensor(num_rels, h_dim))
         nn.init.xavier_uniform_(self.w_relation,
@@ -279,6 +281,8 @@ if __name__ == '__main__':
             help="Learning rate decay is using SGD")
     parser.add_argument("--relation-type", type=str, default="block", choices=["block", "basis", "vector"],
             help="How to encode relations.")
+    parser.add_argument("--relation-size", type=int, default=-1,
+            help="Size of relation embeddings if using vectors. Must be <= n-hidden.")
 
     args = parser.parse_args()
     print(args)

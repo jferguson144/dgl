@@ -165,7 +165,7 @@ class RGCNBlockLayer(RGCNLayer):
 class RGCN_Attn_BlockLayer(RGCNLayer):
     def __init__(self, in_feat, out_feat, num_rels, num_bases, num_heads=1, 
                  bias=None, activation=None, self_loop=False, dropout=0.0, 
-                 concat_attn=True, relation_type="block"):
+                 concat_attn=True, relation_type="block", relation_size=-1):
         super(RGCN_Attn_BlockLayer, self).__init__(in_feat, out_feat, bias,
                                              activation, self_loop=self_loop,
                                              dropout=dropout)
@@ -206,7 +206,10 @@ class RGCN_Attn_BlockLayer(RGCNLayer):
             self.num_rels, self.num_bases * self.submat_in * self.submat_out))
           nn.init.xavier_uniform_(self.weight, gain=nn.init.calculate_gain('relu'))
         elif relation_type == "vector":
-          self.weight = nn.Parameter(torch.Tensor(self.num_rels, out_feat))
+          if relation_size == -1:
+            relation_size = out_feat
+          assert relation_size <= out_feat
+          self.weight = nn.Parameter(torch.Tensor(self.num_rels, relation_size))
           nn.init.xavier_uniform_(self.weight, gain=nn.init.calculate_gain('relu'))
           
 
