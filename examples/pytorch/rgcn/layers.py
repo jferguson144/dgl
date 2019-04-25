@@ -173,6 +173,7 @@ class RGCN_Attn_BlockLayer(RGCNLayer):
         self.num_bases = num_bases
         assert self.num_bases > 0
 
+        self.in_feat = in_feat
         self.out_feat = out_feat
         # Attn stuff
         # attn head transformation to ensure that output vectors are same size as input vcetors
@@ -211,6 +212,11 @@ class RGCN_Attn_BlockLayer(RGCNLayer):
           assert relation_size <= out_feat
           self.weight = nn.Parameter(torch.Tensor(self.num_rels, relation_size))
           nn.init.xavier_uniform_(self.weight, gain=nn.init.calculate_gain('relu'))
+        elif relation_type == "basis":
+          self.weight = nn.Parameter(torch.Tensor(self.num_rels, num_bases))
+          nn.init.xavier_uniform_(self.weight, gain=nn.init.calculate_gain('relu'))
+          self.bases = nn.Parameter(torch.Tensor(num_bases, in_feat * out_feat))
+          nn.init.xavier_uniform_(self.bases, gain=nn.init.calculate_gain('relu'))
           
 
     def msg_func(self, edges):
@@ -236,10 +242,9 @@ class RGCN_Attn_BlockLayer(RGCNLayer):
                     -1, self.submat_in, self.submat_out)
         node = edges.src['h'].view(-1, 1, self.submat_in)
         edge_value = torch.bmm(node, weight).view(-1, self.out_feat)
-        # Basically, we want to take this and scale it by an attention weight, removing the node normalization
-        # Attention weight might have to be computed first in order to get the appropriate normalization for each edge
         
         return {'edge_value': edge_value}
+
 
     def EdgeTransformVector(self, edges):
       weight = self.weight.index_select(0, edges.data["type"])
@@ -250,6 +255,17 @@ class RGCN_Attn_BlockLayer(RGCNLayer):
       else:
         edge_value += weight
       return {"edge_value": edge_value}
+
+
+    def EdgeTransformBasis(self, edges):
+      weighted_bases = torch.matmul(self.weight, self.bases).view(
+        self.num_rels, self.in_feat, self.out_feat)
+      weight = weighted_bases.index_select(0, edges.data["type"])
+      node = edges.src['h'].view(-1, 1, self.in_feat)
+      edge_value = torch.bmm(node, weight).squeeze(1)
+        
+      return {'edge_value': edge_value}
+      
 
     def EdgeAttention(self, edges):
         # an edge UDF to compute unnormalized attention values from src and transformed dst
@@ -276,7 +292,7 @@ class RGCN_Attn_BlockLayer(RGCNLayer):
         elif self.relation_type == "vector":
           g.apply_edges(self.EdgeTransformVector)
         elif self.relation_type == "basis":
-          pass
+          g.apply_edges(self.EdgeTransformBasis)
         # edges all have edge_value according to W_r * h_s
         # We now want to compute attention between h_d and edge_value
         # h has shape NxX. Want it to have shape NxHxD
