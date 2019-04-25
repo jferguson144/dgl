@@ -47,7 +47,7 @@ class RGCN(BaseRGCN):
           return RGCNLayer(self.h_dim, self.h_dim, self.num_rels, self.num_bases,
                            num_heads=self.num_heads,
                            activation=act, self_loop=True, dropout=self.dropout, 
-                           concat_attn=concat, self.relation_type)
+                           concat_attn=concat, relation_type=self.relation_type)
         else:
           return RGCNLayer(self.h_dim, self.h_dim, self.num_rels, self.num_bases,
                            activation=act, self_loop=True, dropout=self.dropout)
@@ -277,7 +277,7 @@ if __name__ == '__main__':
             help="Use SGD with warm restarts for learning.")
     parser.add_argument("--lr-decay", type=float, default=0.9,
             help="Learning rate decay is using SGD")
-    parser.add_argument("--relation_type", type=str, default="block", choices=["block", "basis", "vector"],
+    parser.add_argument("--relation-type", type=str, default="block", choices=["block", "basis", "vector"],
             help="How to encode relations.")
 
     args = parser.parse_args()
