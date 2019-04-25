@@ -17,7 +17,7 @@ import random
 from dgl.contrib.data import load_data
 
 # TODO (jferguson): This is ugly. Fix it.
-USE_ATTN = False
+USE_ATTN = True
 if USE_ATTN:
   from layers import RGCN_Attn_BlockLayer as RGCNLayer
 else:
@@ -139,7 +139,11 @@ def main(args):
     adj_list, degrees = utils.get_adj_and_degrees(num_nodes, train_data)
 
     # optimizer
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    if args.use_sgd_restart:
+      optimizer = torch.optim.SGD(model.parameters(), lr=args.lr)    
+    else:
+      optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+
 
     model_state_file = 'model_state.pth'
     forward_time = []
@@ -188,6 +192,15 @@ def main(args):
               format(epoch, loss.item(), best_mrr, forward_time[-1], backward_time[-1]))
 
         optimizer.zero_grad()
+
+        if args.use_sgd_restart:
+          if epoch % 50 == 0:
+            for g in optimizer.param_groups:
+              g['lr'] = args.lr
+          elif epoch % 10 == 0:
+            for g in optimizer.param_groups:
+              g['lr'] *= args.lr_decay
+          
 
         # validation
         if epoch % args.evaluate_every == 0:
@@ -259,6 +272,10 @@ if __name__ == '__main__':
             help="perform evaluation every n epochs")
     parser.add_argument("--n-heads", type=int, default=1,
             help="Number of attention heads to use.")
+    parser.add_argument("--use-sgd-restart", default=False, action="store_true",
+            help="Use SGD with warm restarts for learning.")
+    parser.add_argument("--lr-decay", type=float, default=0.9,
+            help="Learning rate decay is using SGD")
 
     args = parser.parse_args()
     print(args)
